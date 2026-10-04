@@ -4,14 +4,18 @@ on:
   workflow_dispatch:
 
   schedule:
-    - cron: "0 8 * * 1-5"
+    - cron: "0 7,8,9,10,11 * * 1-5"
       timezone: "America/Mexico_City"
+
+permissions:
+  contents: write
 
 jobs:
   analizar:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
@@ -30,3 +34,17 @@ jobs:
           WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
           WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
         run: python analizador.py
+
+      - name: Guardar estado de señales
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add estado_senales.json
+
+          if git diff --cached --quiet; then
+            echo "No hay cambios en el estado de señales."
+          else
+            git commit -m "Actualizar estado de señales"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
