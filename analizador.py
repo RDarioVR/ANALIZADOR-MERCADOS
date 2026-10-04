@@ -1,49 +1,104 @@
-name: Analizador de mercados
+            resultado,
+            ensure_ascii=False,
+            indent=2
+        )
+    )
 
-on:
-  workflow_dispatch:
+    # --------------------------------------------------------
+    # 5. Detectar nuevas señales
+    # --------------------------------------------------------
 
-  schedule:
-    - cron: "0 7,8,9,10,11 * * 1-5"
-      timezone: "America/Mexico_City"
+    nuevas_senales = obtener_nuevas_senales(
+        resultado,
+        estado
+    )
 
-permissions:
-  contents: write
+    print(
+        "\nNUEVAS SEÑALES PARA WHATSAPP:"
+    )
 
-jobs:
-  analizar:
-    runs-on: ubuntu-latest
+    if not nuevas_senales:
 
-    steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v4
+        print(
+            "Ninguna."
+        )
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+    else:
 
-      - name: Instalar requests
-        run: pip install requests
+        print(
+            json.dumps(
+                nuevas_senales,
+                ensure_ascii=False,
+                indent=2
+            )
+        )
 
-      - name: Ejecutar analizador
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
-          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
-          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
-        run: python analizador.py
+    # --------------------------------------------------------
+    # 6. Crear resumen GitHub
+    # --------------------------------------------------------
 
-      - name: Guardar estado de señales
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+    resumen = generar_resumen(
+        resultado,
+        estado
+    )
 
-          git add estado_senales.json
+    guardar_resumen_github(
+        resumen
+    )
 
-          if git diff --cached --quiet; then
-            echo "No hay cambios en el estado."
-          else
-            git commit -m "Actualizar estado de señales"
-            git push origin HEAD:${GITHUB_REF_NAME}
-          fi
+    # --------------------------------------------------------
+    # 7. Enviar WhatsApp SOLO si hay señal nueva
+    # --------------------------------------------------------
+
+    if nuevas_senales:
+
+        mensaje = formato_whatsapp(
+            nuevas_senales
+        )
+
+        print(
+            "\nMENSAJE WHATSAPP:"
+        )
+
+        print(
+            mensaje
+        )
+
+        # Primero enviamos.
+        enviar_whatsapp(
+            mensaje
+        )
+
+        # Solo después de recibir
+        # respuesta exitosa marcamos
+        # las señales como enviadas.
+        marcar_senales_enviadas(
+            nuevas_senales,
+            estado
+        )
+
+        guardar_estado(
+            estado
+        )
+
+    else:
+
+        print(
+            "\nNo se enviará WhatsApp "
+            "en esta revisión."
+        )
+
+    # --------------------------------------------------------
+    # 8. Final
+    # --------------------------------------------------------
+
+    print("")
+
+    print(
+        "✅ PROCESO COMPLETADO"
+    )
+
+
+if __name__ == "__main__":
+
+    main()
