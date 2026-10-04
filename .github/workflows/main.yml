@@ -1,10 +1,10 @@
-name: Prueba mercado
+name: Analizador de mercados
 
 on:
   workflow_dispatch:
 
 jobs:
-  prueba:
+  analizar:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,5 +19,7 @@ jobs:
       - name: Instalar requests
         run: pip install requests
 
-      - name: Ejecutar prueba
-        run: python prueba.py
+      - name: Ejecutar analizador
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python analizador.py
