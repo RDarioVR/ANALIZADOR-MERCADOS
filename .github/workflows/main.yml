@@ -26,4 +26,7 @@ jobs:
       - name: Ejecutar analizador
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID }}
+          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
         run: python analizador.py
