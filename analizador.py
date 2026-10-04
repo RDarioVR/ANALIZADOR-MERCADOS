@@ -1,4 +1,5 @@
 import requests
+import json
 from datetime import datetime, timezone
 
 
@@ -6,454 +7,317 @@ from datetime import datetime, timezone
 # CONFIGURACIÓN
 # ============================================================
 
-ACTIVOS = {
-    "EURUSD": "EUR/USD",
-    "XAUUSD": "ORO"
+OPENAI_API_KEY = None
+
+BIQUOTE_URL = "https://biquote.io/api/{symbol}/ohlc"
+
+SYMBOLS = {
+    "EURUSD": "EURUSD",
+    "XAUUSD": "XAUUSD"
 }
 
-API_BASE = "https://biquote.io/api"
-
-H1_BARRAS = 250
-M15_BARRAS = 400
+MODEL = "gpt-6-luna"
 
 
 # ============================================================
-# OBTENER DATOS
+# OBTENER VELAS DE BIQUOTE
 # ============================================================
 
-def obtener_velas(simbolo, intervalo, limite):
-    url = f"{API_BASE}/{simbolo}/ohlc"
+def obtener_velas(symbol, interval, limit=300):
 
-    respuesta = requests.get(
-        url,
-        params={
-            "interval": intervalo,
-            "limit": limite
-        },
-        timeout=20
-    )
+    url = BIQUOTE_URL.format(symbol=symbol)
 
-    respuesta.raise_for_status()
-
-    datos = respuesta.json()
-
-    velas = [
-        v for v in datos["bars"]
-        if not v.get("isOpen", False)
-    ]
-
-    velas.sort(key=lambda x: x["openTime"])
-
-    return velas
-
-
-# ============================================================
-# UTILIDADES
-# ============================================================
-
-def cierre(v):
-    return float(v["close"])
-
-
-def maximo(v):
-    return float(v["high"])
-
-
-def minimo(v):
-    return float(v["low"])
-
-
-def promedio(lista):
-    if not lista:
-        return 0
-
-    return sum(lista) / len(lista)
-
-
-def calcular_ema(valores, periodo):
-    if len(valores) < periodo:
-        return None
-
-    multiplicador = 2 / (periodo + 1)
-
-    ema = promedio(valores[:periodo])
-
-    for precio in valores[periodo:]:
-        ema = (
-            (precio - ema) * multiplicador
-        ) + ema
-
-    return ema
-
-
-def calcular_atr(velas, periodo=14):
-    if len(velas) < periodo + 1:
-        return None
-
-    trs = []
-
-    for i in range(1, len(velas)):
-        actual = velas[i]
-        anterior = velas[i - 1]
-
-        high = maximo(actual)
-        low = minimo(actual)
-        prev_close = cierre(anterior)
-
-        tr = max(
-            high - low,
-            abs(high - prev_close),
-            abs(low - prev_close)
-        )
-
-        trs.append(tr)
-
-    return promedio(trs[-periodo:])
-
-
-def redondear(precio, simbolo):
-    if simbolo == "XAUUSD":
-        return round(precio, 2)
-
-    return round(precio, 5)
-
-
-# ============================================================
-# ESTRUCTURA DE MERCADO
-# ============================================================
-
-def detectar_tendencia_h1(velas):
-    cierres = [cierre(v) for v in velas]
-
-    ema20 = calcular_ema(cierres, 20)
-    ema50 = calcular_ema(cierres, 50)
-
-    if ema20 is None or ema50 is None:
-        return "NEUTRAL"
-
-    precio = cierres[-1]
-
-    if precio > ema20 > ema50:
-        return "ALCISTA"
-
-    if precio < ema20 < ema50:
-        return "BAJISTA"
-
-    return "NEUTRAL"
-
-
-def rango_reciente(velas, cantidad=20):
-    grupo = velas[-cantidad:]
-
-    resistencia = max(maximo(v) for v in grupo)
-    soporte = min(minimo(v) for v in grupo)
-
-    return soporte, resistencia
-
-
-def detectar_estructura_m15(velas):
-    if len(velas) < 30:
-        return "NEUTRAL"
-
-    ultimas = velas[-25:]
-
-    mitad = len(ultimas) // 2
-
-    primera = ultimas[:mitad]
-    segunda = ultimas[mitad:]
-
-    max_primera = max(maximo(v) for v in primera)
-    max_segunda = max(maximo(v) for v in segunda)
-
-    min_primera = min(minimo(v) for v in primera)
-    min_segunda = min(minimo(v) for v in segunda)
-
-    if max_segunda > max_primera and min_segunda > min_primera:
-        return "ALCISTA"
-
-    if max_segunda < max_primera and min_segunda < min_primera:
-        return "BAJISTA"
-
-    return "NEUTRAL"
-
-
-# ============================================================
-# CONFIRMACIÓN DE IMPULSO
-# ============================================================
-
-def confirmar_impulso(velas, direccion):
-    if len(velas) < 5:
-        return False
-
-    ultimas = velas[-5:]
-
-    cierres = [cierre(v) for v in ultimas]
-
-    if direccion == "BUY":
-        return (
-            cierres[-1] > cierres[-2]
-            and cierres[-2] >= cierres[-3]
-        )
-
-    if direccion == "SELL":
-        return (
-            cierres[-1] < cierres[-2]
-            and cierres[-2] <= cierres[-3]
-        )
-
-    return False
-
-
-# ============================================================
-# GENERACIÓN DE SEÑAL
-# ============================================================
-
-def analizar_activo(simbolo, nombre):
-    print("\n" + "=" * 65)
-    print(f"ANÁLISIS: {nombre}")
-    print("=" * 65)
-
-    try:
-        h1 = obtener_velas(
-            simbolo,
-            "1h",
-            H1_BARRAS
-        )
-
-        m15 = obtener_velas(
-            simbolo,
-            "15m",
-            M15_BARRAS
-        )
-
-    except Exception as error:
-        print(f"ERROR OBTENIENDO DATOS: {error}")
-
-        return {
-            "activo": nombre,
-            "senal": "ERROR",
-            "entrada": None,
-            "sl": None,
-            "tp": None,
-            "razon": str(error)
-        }
-
-    if len(h1) < 60 or len(m15) < 60:
-        return {
-            "activo": nombre,
-            "senal": "NO OPERAR",
-            "entrada": None,
-            "sl": None,
-            "tp": None,
-            "razon": "Datos insuficientes"
-        }
-
-    # --------------------------------------------------------
-    # CONTEXTO H1
-    # --------------------------------------------------------
-
-    tendencia_h1 = detectar_tendencia_h1(h1)
-
-    # --------------------------------------------------------
-    # ESTRUCTURA M15
-    # --------------------------------------------------------
-
-    estructura_m15 = detectar_estructura_m15(m15)
-
-    # --------------------------------------------------------
-    # PRECIO Y ATR
-    # --------------------------------------------------------
-
-    precio = cierre(m15[-1])
-
-    atr = calcular_atr(m15, 14)
-
-    if atr is None or atr <= 0:
-        return {
-            "activo": nombre,
-            "senal": "NO OPERAR",
-            "entrada": None,
-            "sl": None,
-            "tp": None,
-            "razon": "ATR no disponible"
-        }
-
-    soporte, resistencia = rango_reciente(
-        m15,
-        20
-    )
-
-    # --------------------------------------------------------
-    # DECISIÓN
-    # --------------------------------------------------------
-
-    direccion = None
-
-    if (
-        tendencia_h1 == "ALCISTA"
-        and estructura_m15 == "ALCISTA"
-        and confirmar_impulso(m15, "BUY")
-    ):
-        direccion = "BUY"
-
-    elif (
-        tendencia_h1 == "BAJISTA"
-        and estructura_m15 == "BAJISTA"
-        and confirmar_impulso(m15, "SELL")
-    ):
-        direccion = "SELL"
-
-    # --------------------------------------------------------
-    # SIN CONFIGURACIÓN
-    # --------------------------------------------------------
-
-    if direccion is None:
-        print("SEÑAL: NO OPERAR")
-        print(f"H1: {tendencia_h1}")
-        print(f"M15: {estructura_m15}")
-        print(f"Precio: {precio}")
-
-        return {
-            "activo": nombre,
-            "senal": "NO OPERAR",
-            "entrada": precio,
-            "sl": None,
-            "tp": None,
-            "razon": (
-                f"H1={tendencia_h1}, "
-                f"M15={estructura_m15}"
-            )
-        }
-
-    # --------------------------------------------------------
-    # STOP LOSS
-    # --------------------------------------------------------
-
-    if direccion == "BUY":
-
-        sl = min(
-            soporte,
-            precio - atr * 1.2
-        )
-
-        riesgo = precio - sl
-
-        if riesgo <= 0:
-            return {
-                "activo": nombre,
-                "senal": "NO OPERAR",
-                "entrada": precio,
-                "sl": None,
-                "tp": None,
-                "razon": "SL inválido"
-            }
-
-        tp = precio + riesgo * 2.5
-
-    else:
-
-        sl = max(
-            resistencia,
-            precio + atr * 1.2
-        )
-
-        riesgo = sl - precio
-
-        if riesgo <= 0:
-            return {
-                "activo": nombre,
-                "senal": "NO OPERAR",
-                "entrada": precio,
-                "sl": None,
-                "tp": None,
-                "razon": "SL inválido"
-            }
-
-        tp = precio - riesgo * 2.5
-
-    entrada = redondear(precio, simbolo)
-    sl = redondear(sl, simbolo)
-    tp = redondear(tp, simbolo)
-
-    print(f"SEÑAL: {direccion}")
-    print(f"H1: {tendencia_h1}")
-    print(f"M15: {estructura_m15}")
-    print(f"Entrada: {entrada}")
-    print(f"Stop Loss: {sl}")
-    print(f"Take Profit: {tp}")
-
-    return {
-        "activo": nombre,
-        "senal": direccion,
-        "entrada": entrada,
-        "sl": sl,
-        "tp": tp,
-        "razon": (
-            f"H1={tendencia_h1}, "
-            f"M15={estructura_m15}, "
-            f"ATR={round(atr, 6)}"
-        )
+    params = {
+        "interval": interval,
+        "limit": limit
     }
 
+    response = requests.get(url, params=params, timeout=30)
+    response.raise_for_status()
+
+    data = response.json()
+
+    # Algunos formatos pueden devolver directamente una lista
+    if isinstance(data, list):
+        velas = data
+
+    elif isinstance(data, dict):
+        velas = (
+            data.get("data")
+            or data.get("candles")
+            or data.get("result")
+            or []
+        )
+
+    else:
+        velas = []
+
+    # Nos quedamos únicamente con velas cerradas
+    cerradas = []
+
+    for vela in velas:
+
+        if isinstance(vela, dict):
+
+            if vela.get("isOpen") is True:
+                continue
+
+            try:
+                cerradas.append({
+                    "time": vela.get("time") or vela.get("timestamp"),
+                    "open": float(vela.get("open")),
+                    "high": float(vela.get("high")),
+                    "low": float(vela.get("low")),
+                    "close": float(vela.get("close"))
+                })
+            except:
+                continue
+
+    # Orden cronológico
+    cerradas.sort(key=lambda x: str(x["time"]))
+
+    return cerradas
+
 
 # ============================================================
-# RESUMEN
+# CONVERTIR DATOS A TEXTO
+# ============================================================
+
+def preparar_datos(symbol, h1, m15):
+
+    texto = f"\n\n===== {symbol} =====\n"
+
+    texto += "\n--- H1 ---\n"
+
+    for vela in h1:
+        texto += (
+            f'{vela["time"]} | '
+            f'O={vela["open"]} '
+            f'H={vela["high"]} '
+            f'L={vela["low"]} '
+            f'C={vela["close"]}\n'
+        )
+
+    texto += "\n--- M15 ---\n"
+
+    for vela in m15:
+        texto += (
+            f'{vela["time"]} | '
+            f'O={vela["open"]} '
+            f'H={vela["high"]} '
+            f'L={vela["low"]} '
+            f'C={vela["close"]}\n'
+        )
+
+    return texto
+
+
+# ============================================================
+# LLAMAR A OPENAI
+# ============================================================
+
+def analizar_con_openai(datos):
+
+    import os
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+
+    if not api_key:
+        raise Exception(
+            "No se encontró OPENAI_API_KEY en las variables de entorno."
+        )
+
+    instrucciones = """
+Eres un analista profesional de mercados financieros.
+
+Tu tarea es analizar EUR/USD y XAU/USD utilizando EXCLUSIVAMENTE
+los datos de velas OHLC que recibirás.
+
+IMPORTANTE:
+
+1. IGNORA cualquier estrategia, indicador, sistema o preferencia
+   utilizada anteriormente en esta conversación o proyecto.
+
+2. Haz el análisis completamente desde cero.
+
+3. No asumas que debe existir una operación.
+
+4. Si la estructura del mercado no es suficientemente clara,
+   responde NO OPERAR.
+
+5. Utiliza H1 para determinar el contexto principal.
+
+6. Utiliza M15 para buscar la oportunidad concreta de entrada.
+
+7. Analiza acción del precio, estructura, máximos y mínimos,
+   impulsos, retrocesos, zonas de reacción, rupturas,
+   liquidez y contexto entre H1 y M15 cuando los datos lo permitan.
+
+8. No inventes precios que no sean coherentes con las velas recibidas.
+
+9. La entrada debe estar cerca de una zona técnicamente razonable.
+
+10. El Stop Loss debe quedar en un nivel donde la idea quede
+    técnicamente invalidada.
+
+11. El Take Profit debe estar en una zona razonable de recorrido
+    según la estructura disponible.
+
+12. Si no existe una relación riesgo/beneficio razonable,
+    puedes responder NO OPERAR.
+
+13. No abras operaciones simplemente porque el precio esté subiendo
+    o bajando.
+
+14. La prioridad es CALIDAD DE LA OPERACIÓN, no cantidad.
+
+Devuelve únicamente un JSON válido con esta estructura:
+
+{
+  "analisis": [
+    {
+      "symbol": "EURUSD",
+      "direccion": "BUY",
+      "entrada": 0,
+      "sl": 0,
+      "tp": 0,
+      "confianza": 0,
+      "razon": "..."
+    },
+    {
+      "symbol": "XAUUSD",
+      "direccion": "NO OPERAR",
+      "entrada": null,
+      "sl": null,
+      "tp": null,
+      "confianza": 0,
+      "razon": "..."
+    }
+  ]
+}
+
+Reglas:
+
+- direccion solamente puede ser BUY, SELL o NO OPERAR.
+- confianza debe ser un número de 0 a 100.
+- Si la dirección es NO OPERAR, entrada, sl y tp deben ser null.
+- La razón debe ser breve y concreta.
+- No escribas Markdown.
+- No escribas texto fuera del JSON.
+"""
+
+    payload = {
+        "model": MODEL,
+        "instructions": instrucciones,
+        "input": datos
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers=headers,
+        json=payload,
+        timeout=120
+    )
+
+    response.raise_for_status()
+
+    resultado = response.json()
+
+    # Extraer texto de la respuesta
+    texto = resultado.get("output_text")
+
+    if not texto:
+
+        # Compatibilidad con estructura de output
+        for item in resultado.get("output", []):
+
+            if item.get("type") == "message":
+
+                for contenido in item.get("content", []):
+
+                    if contenido.get("type") == "output_text":
+                        texto = contenido.get("text")
+                        break
+
+            if texto:
+                break
+
+    if not texto:
+        raise Exception(
+            "OpenAI no devolvió texto interpretable."
+        )
+
+    texto = texto.strip()
+
+    # Quitar posibles bloques Markdown
+    if texto.startswith("```"):
+        texto = texto.replace("```json", "")
+        texto = texto.replace("```", "")
+        texto = texto.strip()
+
+    return json.loads(texto)
+
+
+# ============================================================
+# PROGRAMA PRINCIPAL
 # ============================================================
 
 def main():
 
-    ahora = datetime.now(timezone.utc)
+    print("=" * 60)
+    print("ANALIZADOR DE MERCADOS - OPENAI")
+    print("=" * 60)
 
-    print("\n")
-    print("############################################################")
-    print("#          ANALIZADOR AUTOMÁTICO DE MERCADOS              #")
-    print("############################################################")
+    todos_los_datos = ""
 
-    print(
-        f"Hora UTC: {ahora.strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    for nombre, symbol in SYMBOLS.items():
 
-    resultados = []
+        print(f"\nObteniendo datos de {nombre}...")
 
-    for simbolo, nombre in ACTIVOS.items():
+        h1 = obtener_velas(symbol, "1h", 300)
+        m15 = obtener_velas(symbol, "15m", 300)
 
-        resultado = analizar_activo(
-            simbolo,
-            nombre
+        print(f"H1 cerradas:  {len(h1)}")
+        print(f"M15 cerradas: {len(m15)}")
+
+        if len(h1) < 50 or len(m15) < 50:
+            raise Exception(
+                f"No hay suficientes datos para {nombre}."
+            )
+
+        todos_los_datos += preparar_datos(
+            nombre,
+            h1,
+            m15
         )
 
-        resultados.append(resultado)
+    print("\nEnviando datos a OpenAI...")
+    print("Modelo:", MODEL)
 
-    # --------------------------------------------------------
-    # TABLA FINAL
-    # --------------------------------------------------------
-
-    print("\n")
-    print("############################################################")
-    print("#                     RESULTADO FINAL                     #")
-    print("############################################################")
-
-    print(
-        f"{'ACTIVO':<12}"
-        f"{'SEÑAL':<12}"
-        f"{'ENTRADA':<14}"
-        f"{'SL':<14}"
-        f"{'TP':<14}"
+    resultado = analizar_con_openai(
+        todos_los_datos
     )
 
-    print("-" * 66)
+    print("\n")
+    print("=" * 60)
+    print("RESULTADO DEL ANÁLISIS")
+    print("=" * 60)
 
-    for resultado in resultados:
-
-        print(
-            f"{resultado['activo']:<12}"
-            f"{resultado['senal']:<12}"
-            f"{str(resultado['entrada']):<14}"
-            f"{str(resultado['sl']):<14}"
-            f"{str(resultado['tp']):<14}"
+    print(
+        json.dumps(
+            resultado,
+            indent=2,
+            ensure_ascii=False
         )
+    )
 
-    print("\nANÁLISIS TERMINADO.")
+    print("\n")
+    print("Análisis terminado.")
 
 
 if __name__ == "__main__":
