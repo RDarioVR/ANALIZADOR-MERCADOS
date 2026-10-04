@@ -3,6 +3,10 @@ name: Analizador de mercados
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "0 8 * * 1-5"
+      timezone: "America/Mexico_City"
+
 jobs:
   analizar:
     runs-on: ubuntu-latest
