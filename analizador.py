@@ -1,13 +1,11 @@
 import requests
 import json
-from datetime import datetime, timezone
+import os
 
 
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
-
-OPENAI_API_KEY = None
 
 BIQUOTE_URL = "https://biquote.io/api/{symbol}/ohlc"
 
@@ -32,55 +30,52 @@ def obtener_velas(symbol, interval, limit=300):
         "limit": limit
     }
 
-    response = requests.get(url, params=params, timeout=30)
+    print(f"Consultando {symbol} {interval}...")
+
+    response = requests.get(
+        url,
+        params=params,
+        timeout=30
+    )
+
     response.raise_for_status()
 
     data = response.json()
 
-    # Algunos formatos pueden devolver directamente una lista
-    if isinstance(data, list):
-        velas = data
+    # BiQuote devuelve las velas dentro de "bars"
+    bars = data.get("bars", [])
 
-    elif isinstance(data, dict):
-        velas = (
-            data.get("data")
-            or data.get("candles")
-            or data.get("result")
-            or []
-        )
-
-    else:
-        velas = []
-
-    # Nos quedamos únicamente con velas cerradas
     cerradas = []
 
-    for vela in velas:
+    for vela in bars:
 
-        if isinstance(vela, dict):
+        # Ignorar la vela que todavía está abierta
+        if vela.get("isOpen") is True:
+            continue
 
-            if vela.get("isOpen") is True:
-                continue
+        try:
 
-            try:
-                cerradas.append({
-                    "time": vela.get("time") or vela.get("timestamp"),
-                    "open": float(vela.get("open")),
-                    "high": float(vela.get("high")),
-                    "low": float(vela.get("low")),
-                    "close": float(vela.get("close"))
-                })
-            except:
-                continue
+            cerradas.append({
+                "time": vela.get("openTime"),
+                "open": float(vela.get("open")),
+                "high": float(vela.get("high")),
+                "low": float(vela.get("low")),
+                "close": float(vela.get("close"))
+            })
 
-    # Orden cronológico
-    cerradas.sort(key=lambda x: str(x["time"]))
+        except (TypeError, ValueError):
+            continue
+
+    # Ordenar desde la vela más antigua hasta la más reciente
+    cerradas.sort(
+        key=lambda x: str(x["time"])
+    )
 
     return cerradas
 
 
 # ============================================================
-# CONVERTIR DATOS A TEXTO
+# PREPARAR DATOS
 # ============================================================
 
 def preparar_datos(symbol, h1, m15):
@@ -90,6 +85,7 @@ def preparar_datos(symbol, h1, m15):
     texto += "\n--- H1 ---\n"
 
     for vela in h1:
+
         texto += (
             f'{vela["time"]} | '
             f'O={vela["open"]} '
@@ -101,6 +97,7 @@ def preparar_datos(symbol, h1, m15):
     texto += "\n--- M15 ---\n"
 
     for vela in m15:
+
         texto += (
             f'{vela["time"]} | '
             f'O={vela["open"]} '
@@ -113,65 +110,76 @@ def preparar_datos(symbol, h1, m15):
 
 
 # ============================================================
-# LLAMAR A OPENAI
+# ANALIZAR CON OPENAI
 # ============================================================
 
 def analizar_con_openai(datos):
 
-    import os
-
     api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
+
         raise Exception(
-            "No se encontró OPENAI_API_KEY en las variables de entorno."
+            "No se encontró OPENAI_API_KEY."
         )
 
     instrucciones = """
 Eres un analista profesional de mercados financieros.
 
-Tu tarea es analizar EUR/USD y XAU/USD utilizando EXCLUSIVAMENTE
-los datos de velas OHLC que recibirás.
+Analiza EUR/USD y XAU/USD desde cero utilizando únicamente
+los datos OHLC proporcionados.
 
 IMPORTANTE:
 
-1. IGNORA cualquier estrategia, indicador, sistema o preferencia
-   utilizada anteriormente en esta conversación o proyecto.
+- IGNORA cualquier estrategia anterior.
+- IGNORA indicadores o sistemas utilizados anteriormente.
+- No reutilices reglas previas del proyecto.
+- Haz el análisis de forma independiente.
+- No estás obligado a generar una operación.
+- Si la estructura no es clara, responde NO OPERAR.
 
-2. Haz el análisis completamente desde cero.
+Usa:
 
-3. No asumas que debe existir una operación.
+H1:
+Para determinar el contexto general, estructura, tendencia,
+máximos, mínimos, zonas importantes y dirección predominante.
 
-4. Si la estructura del mercado no es suficientemente clara,
-   responde NO OPERAR.
+M15:
+Para buscar una posible entrada concreta y confirmar si existe
+una oportunidad operable.
 
-5. Utiliza H1 para determinar el contexto principal.
+Analiza cuando sea posible:
 
-6. Utiliza M15 para buscar la oportunidad concreta de entrada.
+- estructura de mercado
+- máximos y mínimos
+- rupturas
+- cambios de estructura
+- impulsos
+- retrocesos
+- zonas de reacción
+- liquidez
+- rechazo de precios
+- relación entre H1 y M15
+- ubicación actual del precio
 
-7. Analiza acción del precio, estructura, máximos y mínimos,
-   impulsos, retrocesos, zonas de reacción, rupturas,
-   liquidez y contexto entre H1 y M15 cuando los datos lo permitan.
+La entrada debe ser técnicamente razonable.
 
-8. No inventes precios que no sean coherentes con las velas recibidas.
+El Stop Loss debe colocarse donde la idea quede invalidada.
 
-9. La entrada debe estar cerca de una zona técnicamente razonable.
+El Take Profit debe estar en una zona razonable según la
+estructura del mercado.
 
-10. El Stop Loss debe quedar en un nivel donde la idea quede
-    técnicamente invalidada.
+NO inventes datos que no aparezcan en las velas.
 
-11. El Take Profit debe estar en una zona razonable de recorrido
-    según la estructura disponible.
+Si la operación no presenta suficiente claridad,
+responde NO OPERAR.
 
-12. Si no existe una relación riesgo/beneficio razonable,
-    puedes responder NO OPERAR.
+La prioridad es calidad y protección del capital,
+no generar operaciones por obligación.
 
-13. No abras operaciones simplemente porque el precio esté subiendo
-    o bajando.
+Devuelve ÚNICAMENTE JSON válido.
 
-14. La prioridad es CALIDAD DE LA OPERACIÓN, no cantidad.
-
-Devuelve únicamente un JSON válido con esta estructura:
+Formato obligatorio:
 
 {
   "analisis": [
@@ -198,12 +206,23 @@ Devuelve únicamente un JSON válido con esta estructura:
 
 Reglas:
 
-- direccion solamente puede ser BUY, SELL o NO OPERAR.
-- confianza debe ser un número de 0 a 100.
-- Si la dirección es NO OPERAR, entrada, sl y tp deben ser null.
-- La razón debe ser breve y concreta.
-- No escribas Markdown.
-- No escribas texto fuera del JSON.
+direccion solamente puede ser:
+BUY
+SELL
+NO OPERAR
+
+confianza debe ser un número entre 0 y 100.
+
+Si direccion = NO OPERAR:
+entrada = null
+sl = null
+tp = null
+
+La razón debe ser breve y concreta.
+
+No escribas Markdown.
+
+No escribas texto fuera del JSON.
 """
 
     payload = {
@@ -217,6 +236,9 @@ Reglas:
         "Content-Type": "application/json"
     }
 
+    print("\nEnviando datos a OpenAI...")
+    print("Modelo:", MODEL)
+
     response = requests.post(
         "https://api.openai.com/v1/responses",
         headers=headers,
@@ -228,12 +250,12 @@ Reglas:
 
     resultado = response.json()
 
-    # Extraer texto de la respuesta
+    # La Responses API puede entregar output_text directamente
     texto = resultado.get("output_text")
 
+    # Compatibilidad con estructura output
     if not texto:
 
-        # Compatibilidad con estructura de output
         for item in resultado.get("output", []):
 
             if item.get("type") == "message":
@@ -241,23 +263,35 @@ Reglas:
                 for contenido in item.get("content", []):
 
                     if contenido.get("type") == "output_text":
+
                         texto = contenido.get("text")
+
                         break
 
             if texto:
                 break
 
     if not texto:
+
         raise Exception(
             "OpenAI no devolvió texto interpretable."
         )
 
     texto = texto.strip()
 
-    # Quitar posibles bloques Markdown
+    # Quitar Markdown si el modelo lo agrega accidentalmente
     if texto.startswith("```"):
-        texto = texto.replace("```json", "")
-        texto = texto.replace("```", "")
+
+        texto = texto.replace(
+            "```json",
+            ""
+        )
+
+        texto = texto.replace(
+            "```",
+            ""
+        )
+
         texto = texto.strip()
 
     return json.loads(texto)
@@ -277,17 +311,40 @@ def main():
 
     for nombre, symbol in SYMBOLS.items():
 
-        print(f"\nObteniendo datos de {nombre}...")
+        print(f"\n========================================")
+        print(f"OBTENIENDO DATOS DE {nombre}")
+        print(f"========================================")
 
-        h1 = obtener_velas(symbol, "1h", 300)
-        m15 = obtener_velas(symbol, "15m", 300)
+        h1 = obtener_velas(
+            symbol,
+            "1h",
+            300
+        )
 
-        print(f"H1 cerradas:  {len(h1)}")
-        print(f"M15 cerradas: {len(m15)}")
+        m15 = obtener_velas(
+            symbol,
+            "15m",
+            300
+        )
 
-        if len(h1) < 50 or len(m15) < 50:
+        print(
+            f"H1 cerradas: {len(h1)}"
+        )
+
+        print(
+            f"M15 cerradas: {len(m15)}"
+        )
+
+        if len(h1) < 50:
+
             raise Exception(
-                f"No hay suficientes datos para {nombre}."
+                f"No hay suficientes datos H1 para {nombre}."
+            )
+
+        if len(m15) < 50:
+
+            raise Exception(
+                f"No hay suficientes datos M15 para {nombre}."
             )
 
         todos_los_datos += preparar_datos(
@@ -296,12 +353,17 @@ def main():
             m15
         )
 
-    print("\nEnviando datos a OpenAI...")
-    print("Modelo:", MODEL)
+    # ========================================================
+    # ENVIAR TODO A OPENAI
+    # ========================================================
 
     resultado = analizar_con_openai(
         todos_los_datos
     )
+
+    # ========================================================
+    # MOSTRAR RESULTADO
+    # ========================================================
 
     print("\n")
     print("=" * 60)
@@ -317,8 +379,13 @@ def main():
     )
 
     print("\n")
-    print("Análisis terminado.")
+    print("Análisis terminado correctamente.")
 
+
+# ============================================================
+# INICIO
+# ============================================================
 
 if __name__ == "__main__":
+
     main()
