@@ -2,11 +2,6 @@ import requests
 import json
 import os
 
-
-# ============================================================
-# CONFIGURACIÓN
-# ============================================================
-
 BIQUOTE_URL = "https://biquote.io/api/{symbol}/ohlc"
 
 SYMBOLS = {
@@ -17,12 +12,7 @@ SYMBOLS = {
 MODEL = "gpt-6-luna"
 
 
-# ============================================================
-# OBTENER VELAS DE BIQUOTE
-# ============================================================
-
 def obtener_velas(symbol, interval, limit=300):
-
     url = BIQUOTE_URL.format(symbol=symbol)
 
     params = {
@@ -42,14 +32,12 @@ def obtener_velas(symbol, interval, limit=300):
 
     data = response.json()
 
-    # BiQuote devuelve las velas dentro de "bars"
     bars = data.get("bars", [])
 
     cerradas = []
 
     for vela in bars:
 
-        # Ignorar la vela que todavía está abierta
         if vela.get("isOpen") is True:
             continue
 
@@ -66,17 +54,12 @@ def obtener_velas(symbol, interval, limit=300):
         except (TypeError, ValueError):
             continue
 
-    # Ordenar desde la vela más antigua hasta la más reciente
     cerradas.sort(
         key=lambda x: str(x["time"])
     )
 
     return cerradas
 
-
-# ============================================================
-# PREPARAR DATOS
-# ============================================================
 
 def preparar_datos(symbol, h1, m15):
 
@@ -109,21 +92,17 @@ def preparar_datos(symbol, h1, m15):
     return texto
 
 
-# ============================================================
-# ANALIZAR CON OPENAI
-# ============================================================
-
 def analizar_con_openai(datos):
 
     api_key = os.environ.get("OPENAI_API_KEY")
 
     if not api_key:
-
         raise Exception(
             "No se encontró OPENAI_API_KEY."
         )
 
     instrucciones = """
+
 Eres un analista profesional de mercados financieros.
 
 Analiza EUR/USD y XAU/USD desde cero utilizando únicamente
@@ -207,6 +186,7 @@ Formato obligatorio:
 Reglas:
 
 direccion solamente puede ser:
+
 BUY
 SELL
 NO OPERAR
@@ -214,6 +194,7 @@ NO OPERAR
 confianza debe ser un número entre 0 y 100.
 
 Si direccion = NO OPERAR:
+
 entrada = null
 sl = null
 tp = null
@@ -223,7 +204,9 @@ La razón debe ser breve y concreta.
 No escribas Markdown.
 
 No escribas texto fuera del JSON.
+
 """
+
 
     payload = {
         "model": MODEL,
@@ -250,10 +233,8 @@ No escribas texto fuera del JSON.
 
     resultado = response.json()
 
-    # La Responses API puede entregar output_text directamente
     texto = resultado.get("output_text")
 
-    # Compatibilidad con estructura output
     if not texto:
 
         for item in resultado.get("output", []):
@@ -272,14 +253,12 @@ No escribas texto fuera del JSON.
                 break
 
     if not texto:
-
         raise Exception(
             "OpenAI no devolvió texto interpretable."
         )
 
     texto = texto.strip()
 
-    # Quitar Markdown si el modelo lo agrega accidentalmente
     if texto.startswith("```"):
 
         texto = texto.replace(
@@ -297,23 +276,116 @@ No escribas texto fuera del JSON.
     return json.loads(texto)
 
 
-# ============================================================
-# PROGRAMA PRINCIPAL
-# ============================================================
+def generar_resumen(resultado):
+
+    lineas = []
+
+    lineas.append("# 📊 ANÁLISIS DE MERCADO")
+    lineas.append("")
+    lineas.append(
+        "_Análisis automático mediante OpenAI_"
+    )
+    lineas.append("")
+
+    for item in resultado.get("analisis", []):
+
+        symbol = item.get("symbol", "")
+        direccion = item.get("direccion", "")
+        entrada = item.get("entrada")
+        sl = item.get("sl")
+        tp = item.get("tp")
+        confianza = item.get("confianza")
+        razon = item.get("razon", "")
+
+        lineas.append(
+            f"## {symbol}"
+        )
+
+        if direccion == "NO OPERAR":
+
+            lineas.append(
+                "⬜ **NO OPERAR**"
+            )
+
+            lineas.append(
+                f"**Confianza:** {confianza}%"
+            )
+
+        else:
+
+            if direccion == "BUY":
+                señal = "🟢 **BUY**"
+            else:
+                señal = "🔴 **SELL**"
+
+            lineas.append(
+                f"**Señal:** {señal}"
+            )
+
+            lineas.append(
+                f"🟦 **Entrada:** `{entrada}`"
+            )
+
+            lineas.append(
+                f"🟥 **SL:** `{sl}`"
+            )
+
+            lineas.append(
+                f"🟩 **TP:** `{tp}`"
+            )
+
+            lineas.append(
+                f"**Confianza:** {confianza}%"
+            )
+
+        lineas.append(
+            f"**Razón:** {razon}"
+        )
+
+        lineas.append("")
+        lineas.append("---")
+        lineas.append("")
+
+    return "\n".join(lineas)
+
+
+def guardar_resumen_github(resumen):
+
+    ruta = os.environ.get(
+        "GITHUB_STEP_SUMMARY"
+    )
+
+    if not ruta:
+        return
+
+    with open(
+        ruta,
+        "a",
+        encoding="utf-8"
+    ) as archivo:
+
+        archivo.write(resumen)
+
+        archivo.write("\n")
+
 
 def main():
 
     print("=" * 60)
-    print("ANALIZADOR DE MERCADOS - OPENAI")
+    print(
+        "ANALIZADOR DE MERCADOS - OPENAI"
+    )
     print("=" * 60)
 
     todos_los_datos = ""
 
     for nombre, symbol in SYMBOLS.items():
 
-        print(f"\n========================================")
-        print(f"OBTENIENDO DATOS DE {nombre}")
-        print(f"========================================")
+        print("\n========================================")
+        print(
+            f"OBTENIENDO DATOS DE {nombre}"
+        )
+        print("========================================")
 
         h1 = obtener_velas(
             symbol,
@@ -353,17 +425,9 @@ def main():
             m15
         )
 
-    # ========================================================
-    # ENVIAR TODO A OPENAI
-    # ========================================================
-
     resultado = analizar_con_openai(
         todos_los_datos
     )
-
-    # ========================================================
-    # MOSTRAR RESULTADO
-    # ========================================================
 
     print("\n")
     print("=" * 60)
@@ -378,14 +442,25 @@ def main():
         )
     )
 
+    resumen = generar_resumen(
+        resultado
+    )
+
+    guardar_resumen_github(
+        resumen
+    )
+
     print("\n")
-    print("Análisis terminado correctamente.")
+    print("=" * 60)
+    print("RESUMEN")
+    print("=" * 60)
 
+    print(resumen)
 
-# ============================================================
-# INICIO
-# ============================================================
+    print(
+        "\nAnálisis terminado correctamente."
+    )
+
 
 if __name__ == "__main__":
-
     main()
