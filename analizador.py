@@ -1,26 +1,44 @@
-import requests
-import json
 import os
+import json
+import requests
+from datetime import datetime, timezone
 
-BIQUOTE_URL = "https://biquote.io/api/{symbol}/ohlc"
 
-SYMBOLS = {
-    "EURUSD": "EURUSD",
-    "XAUUSD": "XAUUSD"
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+
+WHATSAPP_ACCESS_TOKEN = os.environ["WHATSAPP_ACCESS_TOKEN"]
+WHATSAPP_PHONE_NUMBER_ID = os.environ["WHATSAPP_PHONE_NUMBER_ID"]
+WHATSAPP_TO = os.environ["WHATSAPP_TO"]
+
+OPENAI_MODEL = "gpt-6-luna"
+
+BIQUOTE_BASE = "https://biquote.io/api"
+
+SYMBOLS = ["EURUSD", "XAUUSD"]
+TIMEFRAMES = {
+    "H1": "1h",
+    "M15": "15m"
 }
 
-MODEL = "gpt-6-luna"
+BARS_LIMIT = 300
 
 
-def obtener_velas(symbol, interval, limit=300):
-    url = BIQUOTE_URL.format(symbol=symbol)
+# ============================================================
+# OBTENER VELAS DE BIQUOTE
+# ============================================================
+
+def obtener_velas(symbol, interval, limit=BARS_LIMIT):
+
+    url = f"{BIQUOTE_BASE}/{symbol}/ohlc"
 
     params = {
         "interval": interval,
         "limit": limit
     }
-
-    print(f"Consultando {symbol} {interval}...")
 
     response = requests.get(
         url,
@@ -34,129 +52,113 @@ def obtener_velas(symbol, interval, limit=300):
 
     bars = data.get("bars", [])
 
-    cerradas = []
+    velas_cerradas = [
+        b for b in bars
+        if not b.get("isOpen", False)
+    ]
 
-    for vela in bars:
-
-        if vela.get("isOpen") is True:
-            continue
-
-        try:
-
-            cerradas.append({
-                "time": vela.get("openTime"),
-                "open": float(vela.get("open")),
-                "high": float(vela.get("high")),
-                "low": float(vela.get("low")),
-                "close": float(vela.get("close"))
-            })
-
-        except (TypeError, ValueError):
-            continue
-
-    cerradas.sort(
-        key=lambda x: str(x["time"])
-    )
-
-    return cerradas
-
-
-def preparar_datos(symbol, h1, m15):
-
-    texto = f"\n\n===== {symbol} =====\n"
-
-    texto += "\n--- H1 ---\n"
-
-    for vela in h1:
-
-        texto += (
-            f'{vela["time"]} | '
-            f'O={vela["open"]} '
-            f'H={vela["high"]} '
-            f'L={vela["low"]} '
-            f'C={vela["close"]}\n'
+    if len(velas_cerradas) < 50:
+        raise RuntimeError(
+            f"{symbol} {interval}: pocas velas cerradas "
+            f"({len(velas_cerradas)})"
         )
 
-    texto += "\n--- M15 ---\n"
-
-    for vela in m15:
-
-        texto += (
-            f'{vela["time"]} | '
-            f'O={vela["open"]} '
-            f'H={vela["high"]} '
-            f'L={vela["low"]} '
-            f'C={vela["close"]}\n'
-        )
-
-    return texto
+    return velas_cerradas
 
 
-def analizar_con_openai(datos):
+# ============================================================
+# PREPARAR DATOS PARA OPENAI
+# ============================================================
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+def preparar_datos():
 
-    if not api_key:
-        raise Exception(
-            "No se encontró OPENAI_API_KEY."
-        )
+    mercado = {}
+
+    for symbol in SYMBOLS:
+
+        mercado[symbol] = {}
+
+        for nombre_tf, intervalo in TIMEFRAMES.items():
+
+            print(
+                f"Descargando {symbol} {nombre_tf}..."
+            )
+
+            velas = obtener_velas(
+                symbol,
+                intervalo
+            )
+
+            mercado[symbol][nombre_tf] = velas
+
+            print(
+                f"{symbol} {nombre_tf}: "
+                f"{len(velas)} velas cerradas"
+            )
+
+    return mercado
+
+
+# ============================================================
+# ANALISIS CON OPENAI
+# ============================================================
+
+def analizar_con_openai(mercado):
 
     instrucciones = """
-
 Eres un analista profesional de mercados financieros.
 
-Analiza EUR/USD y XAU/USD desde cero utilizando únicamente
-los datos OHLC proporcionados.
+Analiza ÚNICAMENTE EURUSD y XAUUSD.
 
 IMPORTANTE:
+Ignora completamente cualquier estrategia, indicador,
+preferencia, análisis o instrucción de conversaciones anteriores.
 
-- IGNORA cualquier estrategia anterior.
-- IGNORA indicadores o sistemas utilizados anteriormente.
-- No reutilices reglas previas del proyecto.
-- Haz el análisis de forma independiente.
-- No estás obligado a generar una operación.
-- Si la estructura no es clara, responde NO OPERAR.
+Haz el análisis desde cero utilizando exclusivamente los
+datos OHLC proporcionados.
 
 Usa:
 
-H1:
-Para determinar el contexto general, estructura, tendencia,
-máximos, mínimos, zonas importantes y dirección predominante.
+- H1 para determinar contexto y estructura principal.
+- M15 para confirmar la posible entrada.
 
-M15:
-Para buscar una posible entrada concreta y confirmar si existe
-una oportunidad operable.
+Evalúa de forma independiente:
 
-Analiza cuando sea posible:
-
-- estructura de mercado
+- estructura del mercado
 - máximos y mínimos
-- rupturas
-- cambios de estructura
 - impulsos
 - retrocesos
+- rupturas
+- cambios de estructura
 - zonas de reacción
 - liquidez
-- rechazo de precios
+- rechazos
 - relación entre H1 y M15
-- ubicación actual del precio
+- precio actual
+- calidad de la posible entrada
+- ubicación lógica del stop loss
+- ubicación lógica del take profit
 
-La entrada debe ser técnicamente razonable.
+NO fuerces una operación.
 
-El Stop Loss debe colocarse donde la idea quede invalidada.
+Si la estructura no es suficientemente clara, responde
+"NO OPERAR".
 
-El Take Profit debe estar en una zona razonable según la
-estructura del mercado.
+Si existe una operación clara:
 
-NO inventes datos que no aparezcan en las velas.
+BUY:
+entrada = precio de entrada de compra
+SL = nivel donde la idea queda invalidada
+TP = zona estructural razonable
 
-Si la operación no presenta suficiente claridad,
-responde NO OPERAR.
+SELL:
+entrada = precio de entrada de venta
+SL = nivel donde la idea queda invalidada
+TP = zona estructural razonable
 
-La prioridad es calidad y protección del capital,
-no generar operaciones por obligación.
+La confianza debe ser de 0 a 100.
 
-Devuelve ÚNICAMENTE JSON válido.
+Responde EXCLUSIVAMENTE con JSON válido.
 
 Formato obligatorio:
 
@@ -183,44 +185,35 @@ Formato obligatorio:
   ]
 }
 
-Reglas:
-
-direccion solamente puede ser:
-
-BUY
-SELL
-NO OPERAR
-
-confianza debe ser un número entre 0 y 100.
-
-Si direccion = NO OPERAR:
-
-entrada = null
-sl = null
-tp = null
-
-La razón debe ser breve y concreta.
-
-No escribas Markdown.
-
-No escribas texto fuera del JSON.
-
+No agregues texto antes ni después del JSON.
 """
 
-
     payload = {
-        "model": MODEL,
-        "instructions": instrucciones,
-        "input": datos
+        "model": OPENAI_MODEL,
+        "input": [
+            {
+                "role": "developer",
+                "content": instrucciones
+            },
+            {
+                "role": "user",
+                "content": (
+                    "DATOS OHLC CERRADOS:\n\n"
+                    + json.dumps(
+                        mercado,
+                        ensure_ascii=False
+                    )
+                )
+            }
+        ]
     }
 
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    print("\nEnviando datos a OpenAI...")
-    print("Modelo:", MODEL)
+    print("Enviando datos a OpenAI...")
 
     response = requests.post(
         "https://api.openai.com/v1/responses",
@@ -231,71 +224,117 @@ No escribas texto fuera del JSON.
 
     response.raise_for_status()
 
-    resultado = response.json()
+    data = response.json()
 
-    texto = resultado.get("output_text")
-
-    if not texto:
-
-        for item in resultado.get("output", []):
-
-            if item.get("type") == "message":
-
-                for contenido in item.get("content", []):
-
-                    if contenido.get("type") == "output_text":
-
-                        texto = contenido.get("text")
-
-                        break
-
-            if texto:
-                break
+    texto = data.get("output_text", "")
 
     if not texto:
-        raise Exception(
-            "OpenAI no devolvió texto interpretable."
+
+        # Compatibilidad por si la respuesta viene
+        # en la estructura completa de output.
+        partes = []
+
+        for item in data.get("output", []):
+
+            for content in item.get("content", []):
+
+                if content.get("type") == "output_text":
+
+                    partes.append(
+                        content.get("text", "")
+                    )
+
+        texto = "".join(partes)
+
+    if not texto:
+        raise RuntimeError(
+            "OpenAI no devolvió texto."
         )
 
+    print("\nRespuesta de OpenAI:")
+    print(texto)
+
+    # Limpiar posibles bloques Markdown
     texto = texto.strip()
 
     if texto.startswith("```"):
-
         texto = texto.replace(
             "```json",
             ""
-        )
-
-        texto = texto.replace(
+        ).replace(
             "```",
             ""
+        ).strip()
+
+    try:
+
+        resultado = json.loads(texto)
+
+    except json.JSONDecodeError as e:
+
+        print(
+            "ERROR: No se pudo interpretar "
+            "el JSON de Gemini/OpenAI."
         )
 
-        texto = texto.strip()
+        print(texto)
 
-    return json.loads(texto)
+        raise e
 
+    return resultado
+
+
+# ============================================================
+# CREAR RESUMEN PARA GITHUB
+# ============================================================
 
 def generar_resumen(resultado):
 
     lineas = []
 
-    lineas.append("# 📊 ANÁLISIS DE MERCADO")
-    lineas.append("")
+    lineas.append(
+        "# 📊 ANÁLISIS DE MERCADO"
+    )
+
     lineas.append(
         "_Análisis automático mediante OpenAI_"
     )
+
     lineas.append("")
 
     for item in resultado.get("analisis", []):
 
-        symbol = item.get("symbol", "")
-        direccion = item.get("direccion", "")
-        entrada = item.get("entrada")
-        sl = item.get("sl")
-        tp = item.get("tp")
-        confianza = item.get("confianza")
-        razon = item.get("razon", "")
+        symbol = item.get(
+            "symbol",
+            "?"
+        )
+
+        direccion = item.get(
+            "direccion",
+            "NO OPERAR"
+        )
+
+        entrada = item.get(
+            "entrada"
+        )
+
+        sl = item.get(
+            "sl"
+        )
+
+        tp = item.get(
+            "tp"
+        )
+
+        confianza = item.get(
+            "confianza",
+            0
+        )
+
+        razon = item.get(
+            "razon",
+            ""
+        )
 
         lineas.append(
             f"## {symbol}"
@@ -307,20 +346,25 @@ def generar_resumen(resultado):
                 "⬜ **NO OPERAR**"
             )
 
-            lineas.append(
-                f"**Confianza:** {confianza}%"
-            )
-
         else:
 
             if direccion == "BUY":
-                señal = "🟢 **BUY**"
-            else:
-                señal = "🔴 **SELL**"
 
-            lineas.append(
-                f"**Señal:** {señal}"
-            )
+                lineas.append(
+                    "🟢 **BUY**"
+                )
+
+            elif direccion == "SELL":
+
+                lineas.append(
+                    "🔴 **SELL**"
+                )
+
+            else:
+
+                lineas.append(
+                    f"**{direccion}**"
+                )
 
             lineas.append(
                 f"🟦 **Entrada:** `{entrada}`"
@@ -334,114 +378,268 @@ def generar_resumen(resultado):
                 f"🟩 **TP:** `{tp}`"
             )
 
-            lineas.append(
-                f"**Confianza:** {confianza}%"
-            )
-
         lineas.append(
-            f"**Razón:** {razon}"
+            f"📈 **Confianza:** {confianza}%"
         )
 
-        lineas.append("")
-        lineas.append("---")
+        lineas.append(
+            f"📝 **Razón:** {razon}"
+        )
+
         lineas.append("")
 
     return "\n".join(lineas)
 
 
+# ============================================================
+# GUARDAR RESUMEN EN GITHUB ACTIONS
+# ============================================================
+
 def guardar_resumen_github(resumen):
 
-    ruta = os.environ.get(
+    summary_file = os.environ.get(
         "GITHUB_STEP_SUMMARY"
     )
 
-    if not ruta:
+    if not summary_file:
         return
 
     with open(
-        ruta,
+        summary_file,
         "a",
         encoding="utf-8"
-    ) as archivo:
+    ) as f:
 
-        archivo.write(resumen)
+        f.write(resumen)
 
-        archivo.write("\n")
+        f.write("\n")
 
+
+# ============================================================
+# FORMATO PARA WHATSAPP
+# ============================================================
+
+def formato_whatsapp(resultado):
+
+    ahora = datetime.now(
+        timezone.utc
+    ).strftime(
+        "%d/%m/%Y %H:%M UTC"
+    )
+
+    mensajes = []
+
+    mensajes.append(
+        "📊 *ANÁLISIS DE MERCADO*"
+    )
+
+    mensajes.append(
+        f"🕐 {ahora}"
+    )
+
+    mensajes.append("")
+
+    for item in resultado.get(
+        "analisis",
+        []
+    ):
+
+        symbol = item.get(
+            "symbol",
+            "?"
+        )
+
+        direccion = item.get(
+            "direccion",
+            "NO OPERAR"
+        )
+
+        entrada = item.get(
+            "entrada"
+        )
+
+        sl = item.get(
+            "sl"
+        )
+
+        tp = item.get(
+            "tp"
+        )
+
+        confianza = item.get(
+            "confianza",
+            0
+        )
+
+        razon = item.get(
+            "razon",
+            ""
+        )
+
+        mensajes.append(
+            f"*{symbol}*"
+        )
+
+        if direccion == "NO OPERAR":
+
+            mensajes.append(
+                "⬜ *NO OPERAR*"
+            )
+
+        else:
+
+            if direccion == "BUY":
+
+                mensajes.append(
+                    "🟢 *BUY*"
+                )
+
+            elif direccion == "SELL":
+
+                mensajes.append(
+                    "🔴 *SELL*"
+                )
+
+            else:
+
+                mensajes.append(
+                    f"*{direccion}*"
+                )
+
+            mensajes.append(
+                f"🟦 *Entrada:* {entrada}"
+            )
+
+            mensajes.append(
+                f"🟥 *SL:* {sl}"
+            )
+
+            mensajes.append(
+                f"🟩 *TP:* {tp}"
+            )
+
+        mensajes.append(
+            f"📈 *Confianza:* {confianza}%"
+        )
+
+        mensajes.append(
+            f"📝 {razon}"
+        )
+
+        mensajes.append("")
+
+    mensajes.append(
+        "_Análisis automático_"
+    )
+
+    return "\n".join(mensajes)
+
+
+# ============================================================
+# ENVIAR MENSAJE A WHATSAPP
+# ============================================================
+
+def enviar_whatsapp(mensaje):
+
+    url = (
+        "https://graph.facebook.com/v25.0/"
+        f"{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    )
+
+    headers = {
+        "Authorization": (
+            f"Bearer {WHATSAPP_ACCESS_TOKEN}"
+        ),
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": WHATSAPP_TO,
+        "type": "text",
+        "text": {
+            "preview_url": False,
+            "body": mensaje
+        }
+    }
+
+    print(
+        "\nEnviando análisis a WhatsApp..."
+    )
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+
+    print(
+        "WhatsApp HTTP:",
+        response.status_code
+    )
+
+    if not response.ok:
+
+        print(
+            "Respuesta de WhatsApp:"
+        )
+
+        print(
+            response.text
+        )
+
+        response.raise_for_status()
+
+    print(
+        "✅ Mensaje enviado a WhatsApp."
+    )
+
+
+# ============================================================
+# PROGRAMA PRINCIPAL
+# ============================================================
 
 def main():
 
     print("=" * 60)
+
     print(
-        "ANALIZADOR DE MERCADOS - OPENAI"
+        "ANALIZADOR AUTOMÁTICO DE MERCADOS"
     )
+
     print("=" * 60)
 
-    todos_los_datos = ""
+    print(
+        "Mercados: EURUSD + XAUUSD"
+    )
 
-    for nombre, symbol in SYMBOLS.items():
+    print(
+        "Timeframes: H1 + M15"
+    )
 
-        print("\n========================================")
-        print(
-            f"OBTENIENDO DATOS DE {nombre}"
-        )
-        print("========================================")
+    print("")
 
-        h1 = obtener_velas(
-            symbol,
-            "1h",
-            300
-        )
+    # 1. Descargar mercado
+    mercado = preparar_datos()
 
-        m15 = obtener_velas(
-            symbol,
-            "15m",
-            300
-        )
-
-        print(
-            f"H1 cerradas: {len(h1)}"
-        )
-
-        print(
-            f"M15 cerradas: {len(m15)}"
-        )
-
-        if len(h1) < 50:
-
-            raise Exception(
-                f"No hay suficientes datos H1 para {nombre}."
-            )
-
-        if len(m15) < 50:
-
-            raise Exception(
-                f"No hay suficientes datos M15 para {nombre}."
-            )
-
-        todos_los_datos += preparar_datos(
-            nombre,
-            h1,
-            m15
-        )
-
+    # 2. Analizar con OpenAI
     resultado = analizar_con_openai(
-        todos_los_datos
+        mercado
     )
 
-    print("\n")
-    print("=" * 60)
-    print("RESULTADO DEL ANÁLISIS")
-    print("=" * 60)
+    # 3. Mostrar JSON
+    print("\nRESULTADO FINAL:")
 
     print(
         json.dumps(
             resultado,
-            indent=2,
-            ensure_ascii=False
+            ensure_ascii=False,
+            indent=2
         )
     )
 
+    # 4. Crear resumen GitHub
     resumen = generar_resumen(
         resultado
     )
@@ -450,17 +648,28 @@ def main():
         resumen
     )
 
-    print("\n")
-    print("=" * 60)
-    print("RESUMEN")
-    print("=" * 60)
-
-    print(resumen)
+    # 5. Crear mensaje WhatsApp
+    mensaje = formato_whatsapp(
+        resultado
+    )
 
     print(
-        "\nAnálisis terminado correctamente."
+        "\nMENSAJE WHATSAPP:"
+    )
+
+    print(mensaje)
+
+    # 6. Enviar WhatsApp
+    enviar_whatsapp(
+        mensaje
+    )
+
+    print("")
+    print(
+        "✅ PROCESO COMPLETADO"
     )
 
 
 if __name__ == "__main__":
+
     main()
