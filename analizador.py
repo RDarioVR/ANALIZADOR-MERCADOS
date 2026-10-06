@@ -260,49 +260,64 @@ preferencia, análisis o instrucción de conversaciones anteriores.
 Haz el análisis desde cero utilizando exclusivamente los
 datos OHLC proporcionados.
 
+Este análisis se ejecuta a las 8:00 a. m. hora de Colima.
+La pregunta que debes responder es esencialmente:
+"Con el mercado tal como está en este momento, ¿cuál es la
+mejor operación que puedo tomar en EURUSD y en XAUUSD, con
+entrada, stop loss y take profit?"
+
+NO esperes una configuración perfecta ni exijas que todas las
+confirmaciones estén alineadas al 100%. Queremos encontrar la
+MEJOR OPORTUNIDAD RAZONABLE que exista en ese momento.
+
 Usa:
 
-- H1 para determinar contexto y estructura principal.
-- M15 para confirmar la posible entrada.
+- H1 para contexto, tendencia y estructura principal.
+- M15 para localizar la entrada y afinar entrada, SL y TP.
 
 Evalúa de forma independiente:
 
 - estructura del mercado
-- máximos y mínimos
-- impulsos
-- retrocesos
-- rupturas
-- cambios de estructura
+- máximos y mínimos recientes
+- impulsos y retrocesos
+- rupturas y posibles cambios de estructura
 - zonas de reacción
 - liquidez
 - rechazos
 - relación entre H1 y M15
 - precio actual
-- calidad de la posible entrada
-- ubicación lógica del stop loss
-- ubicación lógica del take profit
+- distancia razonable del SL
+- zona razonable del TP
+- si el punto de entrada todavía tiene sentido al precio actual
 
-NO fuerces una operación.
+REGLA PRINCIPAL:
+Si existe una operación razonable y defendible, debes proponerla.
+No descartes una operación solamente porque no sea perfecta.
+Busca la alternativa con mayor calidad en ese momento.
 
-Es MUY IMPORTANTE que solamente propongas BUY o SELL
-cuando exista una oportunidad suficientemente clara.
+NO OPERAR solamente cuando realmente no exista una operación
+razonablemente defendible con entrada, SL y TP. Por ejemplo,
+si el mercado está extremadamente confuso, los datos son
+insuficientes o cualquier BUY/SELL sería prácticamente inventado.
 
-Si la estructura no es suficientemente clara, responde
-"NO OPERAR".
+No debes crear una operación artificial únicamente para llenar
+el resultado. Pero tampoco debes exigir una configuración
+"perfecta" que haga que casi siempre respondas NO OPERAR.
 
-Si existe una operación clara:
-
-BUY:
-entrada = precio de entrada de compra
+Para BUY:
+entrada = precio de entrada que tenga sentido en el mercado actual
 SL = nivel donde la idea queda invalidada
-TP = zona estructural razonable
+TP = objetivo estructural razonable
 
-SELL:
-entrada = precio de entrada de venta
+Para SELL:
+entrada = precio de entrada que tenga sentido en el mercado actual
 SL = nivel donde la idea queda invalidada
-TP = zona estructural razonable
+TP = objetivo estructural razonable
 
-La confianza debe ser de 0 a 100.
+La confianza debe ser de 0 a 100 y representar la calidad de la
+operación propuesta, no la probabilidad matemática de ganar.
+
+Si hay una operación razonable, entrega SIEMPRE entrada, SL y TP.
 
 Responde EXCLUSIVAMENTE con JSON válido.
 
